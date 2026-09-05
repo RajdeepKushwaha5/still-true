@@ -74,7 +74,7 @@ def git_run(args, root, timeout=20):
     if not args or args[0] not in ALLOWED_GIT:
         raise ValueError("refused non-query git subcommand: %r" % (args[0] if args else None,))
     try:
-        p = subprocess.run(["git", "-C", root] + list(args),
+        p = subprocess.run(["git", "-c", "core.quotePath=false", "-C", root] + list(args),
                            capture_output=True, text=True, timeout=timeout)
     except Exception:
         return {"rc": None, "out": "", "err": "", "how": GIT_DOWN}
