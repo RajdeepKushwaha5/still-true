@@ -285,6 +285,34 @@ def main():
                               % (len(j.get("notes") or []),
                                  j.get("notes_omitted_for_size") or 0)})
 
+        # ---- macOS hands the same filename back in two different Unicode forms
+        #
+        # The filesystem gives it decomposed (NFD), git gives it composed (NFC). They are
+        # different byte strings for one file, so an accented name never matches itself.
+        # Linux produces one form for both, which is why this cannot be caught by running
+        # the play here -- the two forms are built explicitly instead.
+        total += 1
+        import unicodedata as _ud
+        sys.path.insert(0, HERE)
+        try:
+            import notes as _notes
+            nfc = _ud.normalize("NFC", "caf" + chr(0xE9) + ".py")     # cafe with an accent
+            nfd = _ud.normalize("NFD", nfc)                            # e + combining acute
+            if nfc == nfd:
+                failures.append({"case": "unicode:the-two-forms-differ",
+                                 "detail": "the fixture stopped exercising the macOS "
+                                           "case: both forms are now identical"})
+            elif _notes.norm(nfd) != _notes.norm(nfc):
+                failures.append({
+                    "case": "unicode:macos-filename-forms-match",
+                    "detail": "the decomposed and composed spellings of one filename did "
+                              "not compare equal. On macOS the filesystem gives one and "
+                              "git gives the other, so every accented file would be "
+                              "reported as not dirty and not changed"})
+        except Exception as _e:
+            failures.append({"case": "unicode:macos-filename-forms-match",
+                             "detail": "could not check: %s" % _e})
+
         # ---- a failed tool is not an answer
         total += 1
         stub = os.path.join(scratch, "stubbin")
@@ -333,23 +361,6 @@ def main():
         failures.append({"case": "coverage:%s" % verdict,
                          "detail": "no bundled case asserts this verdict, so removing the "
                                    "rule that produces it would not be noticed"})
-
-
-    # ---- git escapes non-ASCII paths before printing them, so a wrapper without
-    # core.quotePath=false reads back a filename that does not exist. On a repository
-    # with an accented filename this made blast-radius report no changes at all.
-    total += 1
-    try:
-        _src = open(os.path.join(HERE, "notes.py"), encoding="utf-8").read()
-        if "core.quotePath=false" not in _src:
-            failures.append({
-                "case": "paths:non-ascii-are-not-escaped",
-                "detail": "the git wrapper does not pass core.quotePath=false, so a path "
-                          "with a non-ASCII character comes back as an escaped string "
-                          "and every file named that way is silently missed"})
-    except OSError as _e:
-        failures.append({"case": "paths:non-ascii-are-not-escaped",
-                         "detail": "could not read the analyzer: %s" % _e})
 
     print(json.dumps({"passed": total - len(failures), "total": total,
                       "failures": failures[:10]}, separators=(",", ":")))

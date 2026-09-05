@@ -32,6 +32,7 @@ import re
 import subprocess
 import sys
 import time
+import unicodedata
 
 sys.dont_write_bytecode = True
 
@@ -63,6 +64,17 @@ a an the and or but if then than that this these those for with without to from 
 at by as is are was were be been being it its we you your our their his her they them
 use using used should must can will would could may might do does did not no yes than
 """.split())
+
+
+def norm(path):
+    """One Unicode form for every path this play compares or stores.
+
+    macOS hands the same filename back decomposed from the filesystem and composed from
+    git. Comparing them raw means an accented name never matches itself, so every path
+    is normalised at the boundary rather than at each comparison, where one would be
+    forgotten.
+    """
+    return unicodedata.normalize("NFC", path or "")
 
 
 def git_run(args, root, timeout=20):
@@ -145,7 +157,7 @@ def repo_state(root):
         for ln in porcelain.splitlines():
             if len(ln) <= 3:
                 continue
-            path = ln[3:].strip().strip(chr(34))
+            path = norm(ln[3:].strip().strip(chr(34)))
             # The ledger is this play's own bookkeeping. Counting it makes the first
             # note dirty the tree and every note after it inherit a warning about
             # work nobody did -- the play reporting itself as your uncommitted change.
@@ -194,9 +206,11 @@ def record(root, payload):
             continue
         full = rel if os.path.isabs(rel) else os.path.join(root, rel)
         rec = hash_file(full)
-        rec["path"] = os.path.relpath(full, root) if not os.path.isabs(rel) else rel
+        rec["path"] = norm(os.path.relpath(full, root)
+                           if not os.path.isabs(rel) else rel)
         # Was this specific file modified but not committed at the moment of the claim?
-        rec["dirty_at_record"] = rec["path"] in set(state.get("dirty_paths") or [])
+        rec["dirty_at_record"] = rec["path"] in set(
+            norm(d) for d in (state.get("dirty_paths") or []))
         evidence.append(rec)
 
     note = {
@@ -290,7 +304,7 @@ def collect(root):
         # 200-note ledger and killed the run at ARG_MAX.
         changed, gone, unreadable_ev, paths = [], [], [], []
         for rec in note.get("evidence") or []:
-            rel = rec.get("path") or ""
+            rel = norm(rec.get("path") or "")
             paths.append(rel)
             full = rel if os.path.isabs(rel) else os.path.join(root, rel)
             cur = hash_file(full)
