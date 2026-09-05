@@ -39,6 +39,8 @@ NOTES_ROOT = ".agent-notes"
 NOTES_DIR = "notes"
 MAX_NOTES = 200
 MAX_EVIDENCE = 40
+MAX_LIST = 12          # paths shown per note; the total is always reported beside it
+BUDGET = 56000         # collect payload ceiling, under rote's 65536 with room to spare
 HASH_CHARS = 16
 MAX_BYTES = 4 * 1024 * 1024        # a file larger than this is hashed by size+mtime only
 
@@ -282,17 +284,51 @@ def collect(root):
         except (OSError, ValueError) as e:
             unreadable.append({"file": name, "reason": type(e).__name__})
             continue
-        note["_file"] = name
-        # re-hash every piece of evidence AS IT IS NOW
-        now = []
+        # Re-hash every piece of evidence as it is NOW, and decide here. The hashes
+        # are the bulk and judge has no use for them: it needs to know which files
+        # moved, not what they hash to. Shipping them cost 1,423,237 bytes on a
+        # 200-note ledger and killed the run at ARG_MAX.
+        changed, gone, unreadable_ev, paths = [], [], [], []
         for rec in note.get("evidence") or []:
             rel = rec.get("path") or ""
+            paths.append(rel)
             full = rel if os.path.isabs(rel) else os.path.join(root, rel)
             cur = hash_file(full)
-            cur["path"] = rel
-            now.append(cur)
-        note["_now"] = now
-        notes.append(note)
+            if rec.get("state") != "hashed":
+                unreadable_ev.append(rel)
+            elif cur.get("state") == "unreadable":
+                gone.append(rel)
+            elif cur.get("state") != "hashed":
+                unreadable_ev.append(rel)
+            elif cur.get("sha256") != rec.get("sha256"):
+                changed.append(rel)
+
+        notes.append({
+            "file": name,
+            "agent": note.get("agent", ""),
+            "claim": (note.get("claim") or "")[:400],
+            "verified_by": (note.get("verified_by") or "")[:200],
+            "unfinished": (note.get("unfinished") or "")[:400],
+            "branch": note.get("branch", ""),
+            "recorded_at": note.get("recorded_at"),
+            "tree_dirty_at_record": bool(note.get("tree_dirty_at_record")),
+            "dirty_count_at_record": note.get("dirty_count_at_record", 0),
+            "evidence_count": len(note.get("evidence") or []),
+            "paths": paths[:MAX_LIST],
+            "changed": changed[:MAX_LIST], "changed_total": len(changed),
+            "gone": gone[:MAX_LIST], "gone_total": len(gone),
+            "unreadable_ev": unreadable_ev[:MAX_LIST],
+            "unreadable_ev_total": len(unreadable_ev),
+        })
+
+    # Last resort. Everything above ships answers rather than material; if a ledger is
+    # still too large to hand on, the oldest notes are dropped and counted rather than
+    # the run dying at ARG_MAX with nothing to show.
+    omitted = 0
+    notes.sort(key=lambda n: n.get("recorded_at") or 0, reverse=True)
+    while len(json.dumps(notes)) > BUDGET and len(notes) > 1:
+        notes.pop()
+        omitted += 1
 
     return {
         "status": "ok", "root": root,
@@ -300,6 +336,7 @@ def collect(root):
                        if root.endswith(os.path.join("demo", "project")) else root),
         "state": state, "notes": notes, "unreadable": unreadable,
         "notes_truncated": len(names) > MAX_NOTES,
+        "notes_omitted_for_size": omitted,
     }
 
 
@@ -311,7 +348,7 @@ def terms(text):
 
 
 def evidence_paths(note):
-    return set(r.get("path") for r in (note.get("evidence") or []) if r.get("path"))
+    return set(p for p in (note.get("paths") or []) if p)
 
 
 def find_competing(notes):
@@ -332,10 +369,10 @@ def find_competing(notes):
             if not shared_files and len(shared_terms) < 3:
                 continue
             out.append({
-                "left": {"file": a.get("_file"), "agent": a.get("agent"),
+                "left": {"file": a.get("file"), "agent": a.get("agent"),
                          "claim": (a.get("claim") or "")[:300],
                          "recorded_at": a.get("recorded_at")},
-                "right": {"file": b.get("_file"), "agent": b.get("agent"),
+                "right": {"file": b.get("file"), "agent": b.get("agent"),
                           "claim": (b.get("claim") or "")[:300],
                           "recorded_at": b.get("recorded_at")},
                 "shared_evidence": sorted(shared_files)[:5],
@@ -346,29 +383,21 @@ def find_competing(notes):
 
 
 def judge_note(note, state):
+    """Decide from the comparison collect already made. No file is read here."""
     row = {
-        "file": note.get("_file"), "agent": note.get("agent"),
-        "claim": (note.get("claim") or "")[:400],
-        "verified_by": (note.get("verified_by") or "")[:200],
-        "unfinished": (note.get("unfinished") or "")[:400],
+        "file": note.get("file"), "agent": note.get("agent"),
+        "claim": note.get("claim") or "",
+        "verified_by": note.get("verified_by") or "",
+        "unfinished": note.get("unfinished") or "",
         "recorded_at": note.get("recorded_at"),
         "branch": note.get("branch", ""),
-        "changed": [], "unreadable": [], "gone": [],
+        "changed": note.get("changed") or [],
+        "changed_total": note.get("changed_total", 0),
+        "gone": note.get("gone") or [],
+        "gone_total": note.get("gone_total", 0),
+        "unreadable": note.get("unreadable_ev") or [],
     }
-    ev = note.get("evidence") or []
-    now = {r.get("path"): r for r in (note.get("_now") or [])}
-
-    for rec in ev:
-        p = rec.get("path")
-        cur = now.get(p) or {"state": "unreadable", "reason": "not re-read"}
-        if rec.get("state") != "hashed":
-            row["unreadable"].append(p)
-        elif cur.get("state") == "unreadable":
-            row["gone"].append(p)
-        elif cur.get("state") != "hashed":
-            row["unreadable"].append(p)
-        elif cur.get("sha256") != rec.get("sha256"):
-            row["changed"].append(p)
+    ev = note.get("evidence_count") or 0
 
     # ---- verdict, most serious first
     if note.get("tree_dirty_at_record"):
@@ -385,12 +414,12 @@ def judge_note(note, state):
                          "not automatically true on another"
                          % (note["branch"], state["branch"]))
         return row
-    if row["gone"]:
+    if row["gone_total"]:
         row["verdict"] = "FILE_IS_GONE"
         row["detail"] = ("the file(s) this note is about cannot be read now: %s"
                          % ", ".join(row["gone"][:3]))
         return row
-    if row["changed"]:
+    if row["changed_total"]:
         row["verdict"] = "FILE_CHANGED_SINCE"
         row["detail"] = ("%s has changed since this was written, so the code no longer "
                          "backs it up. That is not the same as it being wrong."
@@ -430,6 +459,7 @@ def judge(data):
         "competing": find_competing(notes),
         "unreadable": data.get("unreadable", []),
         "notes_truncated": data.get("notes_truncated", False),
+        "notes_omitted_for_size": data.get("notes_omitted_for_size", 0),
     }
 
 

@@ -230,6 +230,61 @@ def main():
                              "detail": "a note recorded unfinished work and none was "
                                        "carried into the report"})
 
+        # ---- THE PAYLOAD. collect hands its result to judge as an argument, so a
+        # ledger that grows kills the run at ARG_MAX long before rote's 65536 byte
+        # preview cap applies. The first published version emitted 1,423,237 bytes on
+        # 200 notes and died. Anything that puts raw material back on that boundary
+        # must fail here.
+        total += 1
+        big = os.path.join(scratch, "big")
+        os.makedirs(big)
+        git(["init", "-q", "-b", "main"], big)
+        git(["config", "user.email", "t@t.t"], big)
+        git(["config", "user.name", "T"], big)
+        names = []
+        for i in range(30):
+            rel = "f%d.py" % i
+            names.append(rel)
+            with open(os.path.join(big, rel), "w", encoding="utf-8") as fh:
+                fh.write("x = %d%s" % (i, chr(10)))
+        git(["add", "-A"], big)
+        git(["commit", "-q", "-m", "init"], big)
+        for i in range(60):
+            record(big, {"agent": "claude",
+                         "claim": "claim number %d about the system" % i,
+                         "verified_by": "pytest -k case%d" % i,
+                         "evidence": names})
+        raw = run_json([ANALYZER, "collect", big])
+        size = len(json.dumps(raw, separators=(",", ":")))
+        dropped = raw.get("notes_omitted_for_size") or 0
+        # Asserting only that the payload FITS is worthless: the budget guarantees that
+        # by discarding notes. The property worth having is that a ledger this small
+        # costs nothing to carry, so a regression shows up as notes going missing.
+        if dropped:
+            failures.append({
+                "case": "payload:60-notes-cost-nothing-to-carry",
+                "detail": "60 notes needed %d of them dropped to fit (%d bytes). Nothing "
+                          "but the ANSWERS should cross the step boundary; shipping the "
+                          "hashes cost 1,423,237 bytes and killed the run at ARG_MAX"
+                          % (dropped, size)})
+        total += 1
+        if size > 65536:
+            failures.append({
+                "case": "payload:fits-through-the-step",
+                "detail": "collect emitted %d bytes, handed to judge as an argument, so "
+                          "this dies at ARG_MAX before rote's 65536 byte cap applies"
+                          % size})
+        total += 1
+        if raw.get("status") == "ok":
+            j = run_json([ANALYZER, "judge", big, json.dumps(raw)])
+            if len(j.get("notes") or []) + (j.get("notes_omitted_for_size") or 0) != 60:
+                failures.append({
+                    "case": "payload:every-note-accounted-for",
+                    "detail": "60 notes went in; %d came back and %d were reported as "
+                              "left out. A note must never vanish without a count"
+                              % (len(j.get("notes") or []),
+                                 j.get("notes_omitted_for_size") or 0)})
+
         # ---- a failed tool is not an answer
         total += 1
         stub = os.path.join(scratch, "stubbin")
