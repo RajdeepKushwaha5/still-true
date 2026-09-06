@@ -352,6 +352,66 @@ def main():
                              "detail": "a relative root was not refused; a step runs "
                                        "inside rote's workspace, so it would read and "
                                        "write the wrong tree"})
+
+        # ---- apply=true with no claim writes nothing, and says why
+        #
+        # A reviewer did exactly this, got silence, and could not tell whether the play
+        # was refusing or broken.
+        total += 1
+        quiet = run_json([ANALYZER, "record", clean, "true", "claude", "", "", "", ""])
+        if quiet.get("status") != "nothing-to-record":
+            failures.append({
+                "case": "record:apply-without-a-claim-says-so",
+                "detail": "apply=true with no claim returned %r; it must be reportable as "
+                          "having nothing to write rather than silently doing nothing"
+                          % quiet.get("status")})
+        total += 1
+        if not quiet.get("apply_requested"):
+            failures.append({
+                "case": "record:the-two-silences-are-distinguishable",
+                "detail": "a run that ASKED to write and a run that did not look "
+                          "identical in the output, so the reader cannot tell which "
+                          "half was missing"})
+
+        # ---- the add path itself, end to end, which nothing here had exercised
+        # A case must REPORT the shape it tests, never crash on it: if the add path
+        # stops writing, this directory does not exist, and an exception here would
+        # replace the whole result with a traceback.
+        total += 1
+        notes_dir = os.path.join(clean, ".agent-notes", "notes")
+        before = set(os.listdir(notes_dir)) if os.path.isdir(notes_dir) else set()
+        added = run_json([ANALYZER, "record", clean, "true", "codex",
+                          "the retry test passed", "a.py", "pytest -k retry", ""])
+        after = set(os.listdir(notes_dir)) if os.path.isdir(notes_dir) else set()
+        new_files = after - before
+        if added.get("status") != "ok" or len(new_files) != 1:
+            failures.append({
+                "case": "record:adds-exactly-one-note",
+                "detail": "recording a real claim returned %r and created %d file(s)"
+                          % (added.get("status"), len(new_files))})
+        else:
+            total += 1
+            written = json.load(open(os.path.join(notes_dir, new_files.pop()),
+                                     encoding="utf-8"))
+            if (written.get("claim") != "the retry test passed"
+                    or written.get("agent") != "codex"
+                    or not written.get("evidence")
+                    or written["evidence"][0].get("state") != "hashed"):
+                failures.append({
+                    "case": "record:the-note-carries-what-it-was-given",
+                    "detail": "the note on disk did not carry the claim, the agent and a "
+                              "hashed piece of evidence: %r"
+                              % {k: written.get(k) for k in ("claim", "agent")}})
+
+        # ---- and the note it just wrote is judged on the next read
+        total += 1
+        _, rout = judge(clean)
+        claims = [r["claim"] for r in (rout or {}).get("notes", [])]
+        if "the retry test passed" not in claims:
+            failures.append({
+                "case": "record:a-written-note-is-read-back",
+                "detail": "the note that was just written did not appear on the next "
+                          "read; found %r" % claims[:3]})
     finally:
         if scratch and os.path.isdir(scratch):
             shutil.rmtree(scratch, ignore_errors=True)

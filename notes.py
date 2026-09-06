@@ -192,7 +192,10 @@ def record(root, payload):
     every run a reviewer makes, is read-only.
     """
     if not (payload.get("claim") or "").strip():
-        return {"status": "nothing-to-record"}
+        # Two different silences: nobody asked to write anything, or somebody asked to
+        # write and gave nothing to write. The second one needs saying out loud.
+        return {"status": "nothing-to-record",
+                "apply_requested": bool(payload.get("apply"))}
     state = repo_state(root)
     if state.get("git") == "unavailable":
         return {"status": "git-unavailable",
