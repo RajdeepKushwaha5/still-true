@@ -68,7 +68,7 @@ judgement to you. Preferring the newer one is how a real disagreement disappears
 ## It checks itself in front of you
 
 ```
-Self-check: PASSED (18/18 bundled analyzer cases)
+Self-check: PASSED (28/28 bundled analyzer cases)
 ```
 
 Before reading your ledger it **builds a project of its own** in a temporary directory it
@@ -78,14 +78,16 @@ shipped analyzer, and prints the result. A failure withholds the findings.
 Proved by mutation, each restored byte-identically by checksum:
 
 ```
-THE NAIVE VERSION: anchor on the commit id, not the bytes  -> 15/19
-note filenames collide again                              -> 10/20
-the ledger counts itself as your uncommitted work         -> 14/20
-dirty-at-record no longer recorded                        -> 17/19
-branch is ignored                                         -> 17/19
-competing claims no longer reported                       -> 16/17
-git failure folded into a normal answer                   -> 17/18
-relative root no longer refused                           -> 17/18
+note filenames collide again                          -> 19/30
+the ledger counts itself as your uncommitted work    -> 24/30
+THE NAIVE VERSION: anchor on the commit id           -> 25/29
+competing claims no longer reported                  -> 26/27
+dirty-at-record no longer recorded                   -> 27/29
+branch is ignored                                    -> 27/29
+missing evidence not distinguished from present      -> 27/29
+git failure folded into a normal answer              -> 27/28
+relative root no longer refused                      -> 27/28
+THE PAYLOAD BUG: ship every hash between steps again -> 27/28
 ```
 
 Two of those are bugs this actually had. Notes were named `<timestamp>-<agent>.json` and
